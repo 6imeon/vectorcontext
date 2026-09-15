@@ -1,0 +1,4 @@
+{"scale": 3, "service_fields_checked": 240, "service_field_errors": 0, "incident_fields_checked": 180, "incident_field_errors": 0, "fact_layer_docs": 168}
+{"scale": 6, "service_fields_checked": 240, "service_field_errors": 0, "incident_fields_checked": 180, "incident_field_errors": 0, "fact_layer_docs": 168}
+{"scale": 12, "service_fields_checked": 240, "service_field_errors": 0, "incident_fields_checked": 180, "incident_field_errors": 0, "fact_layer_docs": 168}
+{"scale": 3, "corpus": "hard", "service_fields_checked": 280, "service_field_errors": 0, "incident_fields_checked": 300, "incident_field_errors": 0, "changelog_fields_checked": 32, "changelog_field_errors": 0, "fact_layer_docs": 184}
