@@ -410,3 +410,123 @@ include structure, not just values: a stale list is an error the agent will fait
 - Two repeats per condition; differences of one or two questions are within run-to-run variation.
 - The audit cannot fix a plausible wrong value (0.025 for 2.5%); typed validation, as in the document pipeline's schema-typed
   fields, is the missing piece for that.
+
+---
+
+# Part 5: wild ideas for shrinking the context further (2026-09-15, night)
+
+Part 3's best chat conditions still spend ~4k tokens per question, and most of that is not the ledger: the ledger is
+~1.1k tokens and the ten raw exchanges kept "for recency" are 2.5 to 3.8k. This part throws ten unconventional
+reductions at the same benchmark (five clean chats, 95 probes; the same five chats in the messy style; 10 hand-off
+tasks with 195 required facts) and keeps what survives. None of the new conditions keeps a raw window. Code:
+`lab/conditions_wild.py`; runs: tags `wild`, `wild2` (terse format v2), `wildfix` (race-free rerun of the retriever
+conditions), `wildk4`, `wildaudit`, `wildref`; tables from `uv run python lab/summary_wild.py <tag>`.
+
+| condition | what the model sees | fold cost per chat |
+|---|---|---|
+| `chat_ledger0` | the ledger, nothing else (chat_state with keep=0) | $0.05 (ledger) |
+| `chat_terse` | the ledger as one line per entity, `attr=value`, history in brackets | $0.05 |
+| `chat_slice` | hybrid top-12 ledger entries for the question, plus every entry whose attribute name is in the question (so sums, counts and lists get all of them), plus the list of entity names | $0.05 |
+| `chat_tools0` | nothing in the prompt; ledger and transcript reachable through tools | $0.05 |
+| `chat_shorthand` | notes the model wrote for itself in one call over the whole transcript ("fewest tokens you can, any shorthand you can decode") | $0.008 to $0.02 |
+| `chat_rag` | single-shot hybrid top-6 raw exchanges (control) | $0 |
+| `chat_useronly` | the user's turns only, numbered; assistant replies deleted | $0, no LLM |
+| `chat_asstclip` | user turns plus the first sentence of each reply | $0, no LLM |
+| `chat_regex` | user sentences containing a number, money, percent, hyphenated identifier or capitalised name; pastes kept whole | $0, no LLM |
+| `chat_prune` | user turns with function words removed (a LLMLingua-style token diet done with a stop-word list) | $0, no LLM |
+
+## Probes on the clean chats (5 chats, 95 questions, agent gpt-5.6-luna)
+
+Reference rows from Parts 3 and 4: `chat_full` 99% at 30k to 74k tokens per question, `chat_state` 100% at 4.0k,
+`chat_summary` 100% at 4.1k, `chat_vc` 100% at 5.5k.
+
+| condition | accuracy | prompt tok/q | LLM calls/q | notes |
+|---|---|---|---|---|
+| **`chat_slice`** | **100%** (190/190 over two runs) | **544** | 1 | 1/55 of the transcript on the 29k chats, 1/150 on the 72k chat |
+| `chat_slice` @glm-5.3-flash | 100% | 520 | 1 | the cheap agent model is perfect on the sliced ledger ($0.0001/q) |
+| `chat_slice` top-4 (`wildk4`) | 96% | 509 | 1 | the four misses are P0 lists: entries not covered by the attribute expansion fall out |
+| `chat_terse` | 100% | 799 (v1), 838 (v2) | 1 | |
+| `chat_terse` @glm-5.3-flash | 99% | 798 | 1 | one 'original value' miss |
+| `chat_ledger0` | 100% | 1,375 | 1 | the raw window was pure cost on these probes |
+| `chat_shorthand` | 99% | 940 | 1 | one sum on the 72k chat: the notes dropped a budget change |
+| `chat_tools0` | 99% | 2,112 | 2.4 | same sum miss; tool traffic costs more than the sliced ledger |
+| `chat_prune` | 100% | 1,949 | 1 | |
+| `chat_useronly` | 100% | 2,222 | 1 | |
+| `chat_asstclip` | 100% | 4,024 | 1 | |
+| `chat_regex` | 89% | 1,019 | 1 | drops "pull it in by three days" and "Lucas will take notifier" |
+| `chat_rag` | 83 to 86% | 533 to 823 | 1 | sums, negation and lists need entries the top-6 does not contain |
+
+## Probes on the messy chats (5 chats incl. messy long and dense variants, 95 questions)
+
+The messy long (72k) and dense (113 facts) chats are new in this part. Folding them cost $0.082 and $0.063; the long
+one came out with one wrong field (audit-trail's deadline stayed at Oct 16 after a paraphrased "pull it in by three
+days" at exchange 161). `--audit` found exactly that field and patched it (47/48 to 48/48, $0.024), the first time the
+audit repaired a luna ledger; on the other four messy chats it changed nothing that a probe touches.
+
+| condition | accuracy | prompt tok/q | notes |
+|---|---|---|---|
+| `chat_state` (ledger + window, reference) | 99% | 4,354 | 57 q from Part 4 plus the two new chats; the miss is the fold error above |
+| `chat_summary` (reference) | 98% | 4,192 | one sum, one P0 list |
+| **`chat_useronly`** | **100%** | 3,009 | no LLM before question time |
+| **`chat_slice`** | 99%, **100% on the audited ledgers** | 514 | the one miss is the fold error above |
+| `chat_slice` @glm-5.3-flash | 99% | 519 | the same fold error; the cheap agent matches luna on the sliced ledger |
+| `chat_useronly` @glm-5.3-flash | 99% | 3,013 | one P0 list on the 72k chat: the cheap model reading 186 raw turns misses a priority change |
+| `chat_ledger0` | 99%, 100% audited | 1,369 | same single miss |
+| `chat_terse` v2 | 99% | 836 | same single miss; v1 also lost two "original value" questions because its history notation was ambiguous |
+| `chat_asstclip` | 99% | 4,902 | one P0 list |
+| `chat_shorthand` | 97% | 985 | a standup time, a P0 flag and a budget change vanished from the notes |
+| `chat_prune` | 95% | 2,585 | stop-word removal mangles paraphrased sentences ("make that $65k" style edits) |
+| `chat_regex` | 80% | 1,307 | 12 'updated' misses: relative changes and plain-name assignments carry no regex-visible token |
+
+## Hand-off (10 tasks, 195 required facts)
+
+| worker | clean: facts found | tok/task | messy: facts found | tok/task |
+|---|---|---|---|---|
+| `worker_state` (reference, Part 3/4) | 195/195 | 1,340 | 96/96 on 6 tasks | |
+| `worker_terse` | 195/195 | 816 | 194/195 | 814 |
+| `worker_slice` (task-sliced ledger, top-30) | 195/195 | 914 | 194/195 | 901 |
+| `worker_shorthand` | 195/195 | 950 | 194/195 | 996 |
+| `worker_useronly` | 195/195 | 2,230 | 195/195 | 3,017 |
+| `worker_regex` | 185/195 (5/10 notes complete) | 1,031 | 181/195 | 1,319 |
+
+The messy misses for terse and slice are the unaudited long4m deadline; the shorthand miss is a P0 flag its notes
+never recorded.
+
+## What bit
+
+- **The recency window was dead weight.** Every ledger condition is at 100% without it. Dropping it takes the ledger
+  condition from 4.0k to 1.4k tokens per question, and a terse serialisation to 0.8k, with no change in accuracy.
+- **Slicing the ledger by question is the new best condition**: 100% on clean and audited messy chats at ~520 tokens
+  per question, 55 to 150 times below the transcript and 7 times below the previous best. Two details make it work
+  where single-shot RAG fails: a deterministic expansion that pulls in every entry whose attribute the question names
+  (sums, counts, lists) and an entity directory so "not stated" questions stay answerable. Dense retrieval alone
+  (top-4, no expansion) loses list questions; single-shot RAG over raw exchanges loses sums and negations at 83 to 86%.
+- **The cheap agent model becomes perfect on it**: glm-5.3-flash, 100% on the clean sliced ledger at $0.0001 per
+  question and 99% on the messy one (the fold error), where its REPL runs in Part 2 were at 77 to 89%. On the raw user-only
+  transcript the same model loses a list question that luna gets: folding moves the hard reading out of the cheap model's path.
+- **Deleting the assistant is free and lossless on this benchmark.** `chat_useronly` is 100% on clean and messy
+  probes and 195/195 on both hand-off sets with no folding at all, at 2 to 3.6k tokens. It works because every fact in
+  these chats is user-stated and the assistant only explains; it is a property of the corpus as much as of the idea.
+  It also means the honest comparison for the ledger is not the 30k transcript but the 2.2k user-only transcript:
+  the ledger's advantage there is 4x on tokens (sliced) plus checkability, not 50x.
+- **Surface filters are not extraction.** The regex filter and stop-word pruning are the same idea as LLMLingua-style
+  token dropping, and they fail on exactly the facts that matter: relative changes ("three days earlier", "same as X"),
+  swaps, and plain-name assignments. 80 to 95% on the messy chats.
+- **Self-shorthand is a cheaper summary, not a cheaper ledger.** One call, $0.008 per 30k chat (vs $0.05 for online
+  folding), 4x shorter than the rolling summary, and it loses facts the same way a summary does (97 to 99%). Nothing in
+  it can be checked against the transcript field by field.
+- **A harness bug, found by the cheap model.** Probes of one chat ran in parallel on a shared session object; with a
+  retriever call between resetting and appending, two questions could land in one prompt. It only ever surfaced in
+  the GLM slice run (4 of 95 answers contained both questions); luna answers were unaffected, and the retriever
+  conditions were rerun on the fixed wrapper (`wildfix`, 100% again). A second bug: `--model` also changed the
+  paraphrasing model for `--style messy`, so a cheap agent would have been tested on different chats; fixed.
+
+## Caveats
+
+- Single run per condition unless stated; one question is 1% of a table.
+- The zero-LLM conditions exploit a corpus where facts live only in user turns. In agent transcripts the assistant's
+  decisions and tool outputs carry facts, and user-only would drop them; the ledger fold does not care who said it.
+- Slicing was tuned once (k=12 plus attribute expansion) on the same questions it is evaluated on. Question types
+  that name no attribute and need many entries ("what is still undecided?") would need a larger k or the expansion
+  extended to entity names.
+- Spend for this part: ~$1.9, of which ~$0.5 went to folding the two new messy chats and their references.

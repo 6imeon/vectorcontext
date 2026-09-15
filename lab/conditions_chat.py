@@ -25,10 +25,9 @@ def _preload(session, msgs):
 def _probe(session):
     """Each question is an independent probe of the same history: clone the session per ask."""
     base = session.messages
-    _ask = session.ask
-    def ask(text):
-        session.messages = copy.deepcopy(base)
-        return _ask(text)
+    def ask(text):   # thread-safe: a private shallow copy of the session with its own message list (probes run in parallel on the same history)
+        s2 = copy.copy(session); s2.messages = copy.deepcopy(base); s2.turn_no = 0
+        return Session.ask(s2, text)
     session.ask = ask; return session
 
 # 1. full history: every turn stays in context (what plain chatting does)

@@ -10,6 +10,8 @@ from chat_facts import extract_chat, summarize_chat, check_ledger, ledger_text, 
 from conditions_chat import CHAT_CONDITIONS, NEEDS, transcript, chat_vc, _state_block, SYS
 from conditions import Session, ANSWER_RULE
 from grade import rule_grade, grade, extract_answer, _norm, _has
+import conditions_wild as W
+CHAT_CONDITIONS = {**CHAT_CONDITIONS, **W.WILD}; NEEDS = {**NEEDS, **W.WILD_NEEDS}
 
 RES = os.path.join(os.path.dirname(__file__), "..", "results")
 ENC = tiktoken.get_encoding("o200k_base")
@@ -41,8 +43,10 @@ def grade_task(text, task):
     stale = [lab for lab, val in task.stale if _present(text, val)]
     return dict(required=len(task.required), found=len(found), missing=[lab for lab, _, _ in task.required if lab not in found], stale_present=stale, score=len(found) / max(1, len(task.required)))
 
-def prepare(chat_obj, need_summary, need_ledger, model=None, batch=1, audit=False, salt=""):
+def prepare(chat_obj, need_summary, need_ledger, model=None, batch=1, audit=False, salt="", need_shorthand=False):
     art = {}; costs = {}
+    if need_shorthand:
+        sh, c = W.shorthand_chat(chat_obj, model=model, salt=salt); art["shorthand"] = sh; costs["shorthand"] = {**c, "shorthand_tokens": len(ENC.encode(sh))}
     if need_ledger:
         cards, ledger, history, c = extract_chat(chat_obj, model=model, batch=batch, salt=salt)
         if audit:   # second pass over the raw exchanges with the finished ledger (same model as the folder)
@@ -74,8 +78,8 @@ def worker_brief(chat_obj, art, task):
 def worker_vc(chat_obj, art, task):
     s = chat_vc(chat_obj, art, keep=0); s.messages[0]["content"] = s.messages[0]["content"].replace(SYS, WSYS + " ").replace("Only the last 0 exchanges are in your context.", "The conversation is not in your context.")
     return s.ask(task), None
-WORKERS = {"worker_full": worker_full, "worker_summary": worker_summary, "worker_brief": worker_brief, "worker_state": worker_state, "worker_vc": worker_vc}
-WNEEDS = {"worker_summary": "summary", "worker_state": "ledger", "worker_vc": "ledger"}
+WORKERS = {"worker_full": worker_full, "worker_summary": worker_summary, "worker_brief": worker_brief, "worker_state": worker_state, "worker_vc": worker_vc, **W.WILD_WORKERS}
+WNEEDS = {"worker_summary": "summary", "worker_state": "ledger", "worker_vc": "ledger", **W.WILD_WNEEDS}
 
 def main():
     ap = argparse.ArgumentParser()
@@ -99,12 +103,12 @@ def main():
     if args.chats: chats = [c for c in chats if c.id in args.chats.split(",")]
     if args.style == "messy":
         from chat_messy import messy_chats
-        chats = messy_chats(chats)
+        chats = messy_chats(chats, model=fold_model)   # paraphrases come from the folding model, never the agent model
     conds = args.conditions.split(",")
     needs = {(WNEEDS if args.handoff else NEEDS).get(c) for c in conds} | ({"ledger", "summary"} if args.prepare_only else set())
     arts = {}
     with ThreadPoolExecutor(min(4, len(chats))) as ex:
-        for c, (art, costs) in zip(chats, ex.map(lambda c: prepare(c, "summary" in needs, "ledger" in needs, fold_model, args.batch, args.audit, args.fold_salt), chats)):
+        for c, (art, costs) in zip(chats, ex.map(lambda c: prepare(c, "summary" in needs, "ledger" in needs, fold_model, args.batch, args.audit, args.fold_salt, "shorthand" in needs), chats)):
             arts[c.id] = art
             if costs:
                 rec = dict(chat=c.id, batch=args.batch, audit=args.audit, fold_salt=args.fold_salt, style=args.style, n_turns=len(c.turns), chat_tokens=sum(len(ENC.encode(t["user"] + t["assistant"])) for t in c.turns), fold_model=fold_model, **costs)
