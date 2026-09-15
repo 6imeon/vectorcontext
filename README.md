@@ -364,3 +364,7 @@ are kept separately and pooled in the tables), `--audit`, `--style messy`, `--fo
 - `docs/findings.md` full write-up (Parts 1 to 5, every intermediate run); `docs/literature.md` literature review with verified arXiv ids
 - `results/` raw `run_*.jsonl`, `chat_*.jsonl`, `handoff_*.jsonl`, fact and chat caches, `vectorcontext_results.xlsx`
   (the 256 MB embedding cache is not committed and is rebuilt on first run)
+
+## License
+
+MIT. Use it, modify it, ship it; see [LICENSE](LICENSE).
